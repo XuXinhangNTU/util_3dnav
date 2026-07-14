@@ -1,0 +1,13 @@
+<launch>
+  <arg name="network_interface" default="enp3s0"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel"/>
+  <arg name="timeout_sec" default="0.5"/>
+  <arg name="control_frequency" default="200.0"/>
+
+  <node pkg="util_3dnav" type="unitree_cmd_vel_bridge" name="unitree_cmd_vel_bridge" output="screen">
+    <param name="network_interface" value="$(arg network_interface)" type="str"/>
+    <param name="cmd_vel_topic" value="$(arg cmd_vel_topic)" type="str"/>
+    <param name="timeout_sec" value="$(arg timeout_sec)" type="double"/>
+    <param name="control_frequency" value="$(arg control_frequency)" type="double"/>
+  </node>
+</launch>

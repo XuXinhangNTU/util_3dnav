@@ -1,0 +1,21 @@
+<launch>
+  <!-- RViz for the cylinder_planner (scan_planner) pipeline on the real dog:
+       scan_planner_node markers + grid_map + /initial_path from the midware
+       bridge, plus LiDAR / localization displays.
+
+       roslaunch util_3dnav scan_rviz.launch
+       roslaunch util_3dnav scan_rviz.launch cloud_topic:=/points_raw
+       roslaunch util_3dnav scan_rviz.launch path_topic:=/pct_path -->
+
+  <!-- World-frame registered cloud consumed by the planner (run.launch cloud_topic). -->
+  <arg name="cloud_topic" default="/cloud_registered_croped"/>
+  <arg name="odom_topic"  default="/global_localization"/>
+  <arg name="path_topic"  default="/initial_path"/>
+
+  <node pkg="rviz" type="rviz" name="scan_rviz" output="screen"
+        args="-d $(find util_3dnav)/config/ground_dog_scan.rviz">
+    <remap from="/cloud_registered_croped" to="$(arg cloud_topic)"/>
+    <remap from="/global_localization" to="$(arg odom_topic)"/>
+    <remap from="/initial_path"        to="$(arg path_topic)"/>
+  </node>
+</launch>

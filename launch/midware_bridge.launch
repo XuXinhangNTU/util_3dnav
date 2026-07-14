@@ -1,0 +1,92 @@
+<launch>
+  <!-- ── Data directory ────────────────────────────────────────────────── -->
+  <!-- Root of Robot_Midware's flask_service/data folder.
+       Contains task_state.json, robot_state.json, and maps/<map_name>/.  -->
+  <arg name="data_dir"
+       default="/home/root01/workspace/ws_robot/src/Robot_Midware/ros/robot_midware/flask_service/data"/>
+
+  <!-- ── Topics ────────────────────────────────────────────────────────── -->
+  <!-- Odometry / global localization source (arrival detection + path start). -->
+  <arg name="odom_topic"         default="/global_localization"/>
+  <!-- Output reference path for ego_planner. -->
+  <arg name="path_topic"         default="/pct_path"/>
+  <!-- Coordinate frame for all published path poses. -->
+  <arg name="frame_id"           default="map"/>
+
+  <!-- Planner control topics published by this node. -->
+  <arg name="bounded_dodge_enable_topic" default="/planning/bounded_dodge_enable"/>
+  <arg name="speed_limit_topic"          default="/speed_limit/set"/>
+
+  <!-- Obstacle / dodge status subscribed from the planner. -->
+  <arg name="dodge_status_topic" default="/planning/dodge_status"/>
+
+  <!-- ── Path publishing ───────────────────────────────────────────────── -->
+  <!-- Spacing between interpolated path points (m). -->
+  <arg name="path_point_spacing"       default="0.8"/>
+  <!-- How often to re-publish the path even if nothing changed (s). -->
+  <arg name="republish_period"         default="0.5"/>
+  <!-- Publish only the remaining (ahead-of-robot) portion of the phase. -->
+  <arg name="publish_remaining_only"   default="true"/>
+
+  <!-- ── Arrival detection ─────────────────────────────────────────────── -->
+  <!-- XY distance threshold to consider a normal waypoint reached (m). -->
+  <arg name="arrival_threshold"            default="2.0"/>
+  <!-- Tighter threshold for retrace pivot points (m). -->
+  <arg name="turnaround_arrival_threshold" default="0.5"/>
+  <!-- Tighter threshold for geometric corners (m): an interior waypoint B
+       where three consecutive nodes A-B-C bend by more than
+       corner_angle_threshold degrees. -->
+  <arg name="corner_arrival_threshold"     default="2.0"/>
+  <!-- Minimum A-B-C turn angle (deg) for B to count as a corner. 0 disables. -->
+  <arg name="corner_angle_threshold"       default="30.0"/>
+  <!-- Z distance threshold (m); large value = ignore height for arrival. -->
+  <arg name="z_arrival_threshold"          default="1.0"/>
+  <!-- Z offset added to every node pose (m); compensate mount height if needed. -->
+  <arg name="z_bias"                       default="0.0"/>
+  <!-- After arriving at the route's final destination, keep republishing the
+       last pct_path for this long (s) so traj_server's heartbeat stays alive
+       and the robot finishes driving the last segment. 0 = stop at arrival. -->
+  <arg name="completion_hold_sec"          default="2.0"/>
+
+  <!-- ── Misc ──────────────────────────────────────────────────────────── -->
+  <!-- Poll rate for task_state.json + robot_state.json (Hz). -->
+  <arg name="poll_rate"                  default="2.0"/>
+  <!-- Write "status: navigating" to robot_state.json while task is running. -->
+  <arg name="set_robot_status_navigating" default="true"/>
+
+  <node pkg="util_3dnav" type="midware_bridge_node.py"
+        name="midware_bridge_node" output="screen">
+
+    <!-- Paths -->
+    <param name="data_dir"   value="$(arg data_dir)"   type="str"/>
+    <param name="frame_id"   value="$(arg frame_id)"   type="str"/>
+
+    <!-- Topics -->
+    <param name="odom_topic" value="$(arg odom_topic)" type="str"/>
+    <param name="path_topic" value="$(arg path_topic)" type="str"/>
+
+    <!-- Remap planner control / status topics so they are overridable. -->
+    <remap from="/planning/bounded_dodge_enable" to="$(arg bounded_dodge_enable_topic)"/>
+    <remap from="/speed_limit/set"               to="$(arg speed_limit_topic)"/>
+    <remap from="/planning/dodge_status"         to="$(arg dodge_status_topic)"/>
+
+    <!-- Path publishing -->
+    <param name="path_point_spacing"     value="$(arg path_point_spacing)"     type="double"/>
+    <param name="republish_period"       value="$(arg republish_period)"       type="double"/>
+    <param name="publish_remaining_path_only" value="$(arg publish_remaining_only)" type="bool"/>
+
+    <!-- Arrival detection -->
+    <param name="arrival_threshold"            value="$(arg arrival_threshold)"            type="double"/>
+    <param name="turnaround_arrival_threshold" value="$(arg turnaround_arrival_threshold)" type="double"/>
+    <param name="corner_arrival_threshold"     value="$(arg corner_arrival_threshold)"     type="double"/>
+    <param name="corner_angle_threshold"       value="$(arg corner_angle_threshold)"       type="double"/>
+    <param name="z_arrival_threshold"          value="$(arg z_arrival_threshold)"          type="double"/>
+    <param name="z_bias"                       value="$(arg z_bias)"                       type="double"/>
+    <param name="completion_hold_sec"          value="$(arg completion_hold_sec)"          type="double"/>
+
+    <!-- Misc -->
+    <param name="poll_rate"                    value="$(arg poll_rate)"                    type="double"/>
+    <param name="set_robot_status_navigating"  value="$(arg set_robot_status_navigating)"  type="bool"/>
+
+  </node>
+</launch>

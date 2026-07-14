@@ -1,0 +1,46 @@
+<launch>
+  <!-- Simulation-only wrapper. It does not modify the original midware_bridge.launch. -->
+  <arg name="data_dir" default="/home/xxh/king_ws/dogsim_ws/tmp_path"/>
+  <arg name="waypoints_file" default="/home/xxh/king_ws/planning_ws/scripts/odom_waypoints.txt"/>
+  <arg name="waypoint_map_name" default="campus"/>
+  <arg name="task_route" default="0-30-0"/>
+
+  <!-- dogsim ground-robot id, see test_interface/ground_stairs_test.launch -->
+  <arg name="dog_id" default="1"/>
+  <!-- midware_bridge_node.py uses this for arrival detection AND as the
+       published path's start pose (see _build_path_msg's current_position
+       prepend); pointing it at the wrong topic means it never receives
+       odom, so arrival never advances and the path starts from the next
+       waypoint's stored coordinate instead of the robot's live pose. -->
+  <arg name="odom_topic" default="/dog$(arg dog_id)/sim/odom"/>
+  <arg name="path_topic" default="/pct_path"/>
+  <arg name="frame_id" default="map"/>
+  <!-- XY distance to consider a normal waypoint reached (m). -->
+  <arg name="arrival_threshold" default="0.5"/>
+  <arg name="turnaround_arrival_threshold" default="0.5"/>
+  <!-- Hold the pct_path heartbeat this long (s) after final arrival so the
+       robot finishes the last segment; see midware_bridge.launch. -->
+  <arg name="completion_hold_sec" default="2.0"/>
+
+  <arg name="generate_sim_nodes_json" default="true"/>
+
+  <!-- Generate/overwrite data_dir/maps/waypoint_map_name/nodes.json from simulation odom waypoints. -->
+  <include if="$(arg generate_sim_nodes_json)"
+           file="$(find util_3dnav)/launch/simulation_waypoints_nodes.launch">
+    <arg name="data_dir" value="$(arg data_dir)"/>
+    <arg name="waypoints_file" value="$(arg waypoints_file)"/>
+    <arg name="waypoint_map_name" value="$(arg waypoint_map_name)"/>
+    <arg name="task_route" value="$(arg task_route)"/>
+  </include>
+
+  <!-- Start the original bridge with simulation topics. -->
+  <include file="$(find util_3dnav)/launch/midware_bridge.launch">
+    <arg name="data_dir" value="$(arg data_dir)"/>
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+    <arg name="path_topic" value="$(arg path_topic)"/>
+    <arg name="frame_id" value="$(arg frame_id)"/>
+    <arg name="arrival_threshold" value="$(arg arrival_threshold)"/>
+    <arg name="turnaround_arrival_threshold" value="$(arg turnaround_arrival_threshold)"/>
+    <arg name="completion_hold_sec" value="$(arg completion_hold_sec)"/>
+  </include>
+</launch>

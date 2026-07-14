@@ -1,0 +1,20 @@
+<launch>
+  <!-- roslaunch util_3dnav rviz.launch
+       roslaunch util_3dnav rviz.launch lidar_topic:=/points_raw
+       roslaunch util_3dnav rviz.launch config:=sim   # use sim rviz config instead -->
+
+  <arg name="config"      default="real"/>   <!-- "real" or "sim" -->
+  <arg name="lidar_topic" default="/livox/lidar"/>
+  <arg name="odom_topic"  default="/global_localization"/>
+
+  <node if="$(eval arg('config') == 'real')"
+        pkg="rviz" type="rviz" name="rviz" output="screen"
+        args="-d $(find util_3dnav)/config/ground_dog_real.rviz">
+    <remap from="/livox/lidar"         to="$(arg lidar_topic)"/>
+    <remap from="/global_localization" to="$(arg odom_topic)"/>
+  </node>
+
+  <node if="$(eval arg('config') == 'sim')"
+        pkg="rviz" type="rviz" name="rviz" output="screen"
+        args="-d $(find test_interface)/config/ground_dog_sim.rviz"/>
+</launch>

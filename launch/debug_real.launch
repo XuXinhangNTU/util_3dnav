@@ -1,0 +1,24 @@
+<launch>
+  <!-- Real-robot debug RViz.
+       Usage:
+         roslaunch util_3dnav debug_real.launch
+         roslaunch util_3dnav debug_real.launch lidar_topic:=/points_raw
+  -->
+
+  <!-- Override if your real LiDAR publishes on a different topic. -->
+  <arg name="lidar_topic" default="/livox/lidar"/>
+
+  <!-- Override if your localization publishes on a different topic. -->
+  <arg name="odom_topic" default="/global_localization"/>
+
+  <!-- Override fixed frame if your setup uses a different name (e.g. odom). -->
+  <arg name="fixed_frame" default="map"/>
+
+  <node pkg="rviz" type="rviz" name="ground_dog_real_rviz" output="screen"
+        args="-d $(find util_3dnav)/config/ground_dog_real.rviz">
+    <!-- Remap so the saved .rviz topic names stay fixed while the actual
+         ROS topics are configurable at launch time. -->
+    <remap from="/livox/lidar"        to="$(arg lidar_topic)"/>
+    <remap from="/global_localization" to="$(arg odom_topic)"/>
+  </node>
+</launch>

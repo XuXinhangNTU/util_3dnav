@@ -1,0 +1,17 @@
+<launch>
+  <arg name="data_dir" default="/home/xxh/king_ws/dogsim_ws/tmp_path"/>
+  <arg name="waypoints_file" default="/home/xxh/king_ws/planning_ws/scripts/odom_waypoints.txt"/>
+  <arg name="waypoint_map_name" default="campus"/>
+  <arg name="task_route" default="0-100-0"/>
+  <arg name="nodes_json_file" default="$(arg data_dir)/maps/$(arg waypoint_map_name)/nodes.json"/>
+  <arg name="task_state_file" default="$(arg data_dir)/task_state.json"/>
+
+  <node pkg="util_3dnav" type="simulation_waypoints_to_nodes_json.py"
+        name="simulation_waypoints_to_nodes_json" output="screen">
+    <param name="waypoints_file" value="$(arg waypoints_file)" type="str"/>
+    <param name="output_file" value="$(arg nodes_json_file)" type="str"/>
+    <param name="task_state_file" value="$(arg task_state_file)" type="str"/>
+    <param name="map_name" value="$(arg waypoint_map_name)" type="str"/>
+    <param name="task_route" value="$(arg task_route)" type="str"/>
+  </node>
+</launch>
