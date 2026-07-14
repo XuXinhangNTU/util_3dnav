@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path as RosPath
-from std_msgs.msg import Bool, Float64MultiArray, Int8
+from std_msgs.msg import Bool, Empty, Float64, Float64MultiArray, Int8
 
 
 # Speed preset → (max_vel m/s, max_acc m/s²) for /speed_limit/set
@@ -175,6 +175,19 @@ class MidwareBridge:
         # Only accessed in spin loop (single thread) -- no lock needed.
         self._last_nav_mode: int = -1
         self._last_speed: int = -1
+        self._last_detour: float = -1.0
+        # Extra slack (m) on top of DetourLimit for the derived arrival
+        # thresholds (tracking error + controller finish tolerance).
+        self.arrival_margin = float(rospy.get_param("~arrival_margin", 0.3))
+        # True while the terminate WE sent (upper-system cancel) explains the
+        # planner being in STOPPED, so it isn't misreported as a failure.
+        self._sent_terminate = False
+        # Latest /mission/state from the planner (-1 = never received).
+        # 0 IDLE / 1 ACTIVE / 2 PAUSED_BLOCKED / 3 STOPPED.
+        self._mission_state: int = -1
+        # Publish /mission/heartbeat while a task is running so the planner's
+        # watchdog stops the robot if this bridge / the upper system dies.
+        self.enable_heartbeat = bool(rospy.get_param("~enable_heartbeat", True))
 
         self.path_pub = rospy.Publisher(self.path_topic, RosPath, queue_size=1, latch=True)
         self.bounded_dodge_enable_pub = rospy.Publisher(
@@ -183,10 +196,30 @@ class MidwareBridge:
         self.speed_limit_pub = rospy.Publisher(
             "/speed_limit/set", Float64MultiArray, queue_size=1
         )
+        # Task lifecycle control into the planner's MissionFSM: 1 = terminate
+        # (emergency stop + latch STOPPED), 0 = RUN (clear the latch). Sent on
+        # upper-system cancel and before each new task respectively -- a normal
+        # completion sends NOTHING (the robot is already standing and IDLE).
+        self.task_control_pub = rospy.Publisher("/mission/task_control", Int8, queue_size=1)
+        self.heartbeat_pub = rospy.Publisher("/mission/heartbeat", Empty, queue_size=1)
+        # Runtime max-detour corridor width (meters), from
+        # robot_state.json navigation.DetourLimit.
+        self.detour_limit_pub = rospy.Publisher("/detour_limit/set", Float64, queue_size=1)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
         self.dodge_status_sub = rospy.Subscriber(
             "/planning/dodge_status", Int8, self._dodge_status_callback, queue_size=1
         )
+        self.mission_state_sub = rospy.Subscriber(
+            "/mission/state", Int8, self._mission_state_callback, queue_size=1
+        )
+
+        # Heartbeat on an independent timer (5 Hz), not the poll loop: json
+        # file IO in spin() can occasionally stall a tick past the planner's
+        # heartbeat_timeout and trigger a spurious safety stop.
+        if self.enable_heartbeat:
+            self._heartbeat_timer = rospy.Timer(
+                rospy.Duration(0.2), self._heartbeat_tick
+            )
 
         rospy.loginfo("[util_3dnav] data_dir=%s", self.data_dir)
         rospy.loginfo("[util_3dnav] publishing task path to %s", self.path_topic)
@@ -195,6 +228,35 @@ class MidwareBridge:
     def _dodge_status_callback(self, msg: Int8) -> None:
         with self.state_lock:
             self._dodge_status = int(msg.data)
+
+    def _mission_state_callback(self, msg: Int8) -> None:
+        with self.state_lock:
+            self._mission_state = int(msg.data)
+
+    def _heartbeat_tick(self, _event) -> None:
+        # Only while a task is live: the planner arms its watchdog on the
+        # first heartbeat it sees, and clears it on goal-reached/RUN.
+        if self.was_running:
+            self.heartbeat_pub.publish(Empty())
+
+    def _effective_thresholds(self) -> Tuple[float, float]:
+        """(normal_arrival, corner_arrival) thresholds for this moment.
+
+        The planner's max-detour corridor legitimately lets the optimized
+        trajectory pass a waypoint offset by up to DetourLimit (worst at
+        corners, which get cut from the inside) -- with a FIXED arrival
+        radius smaller than that, the robot can drive the whole route
+        without ever "arriving" anywhere. So whenever the upper system set
+        navigation.DetourLimit, the normal and corner thresholds are derived
+        from it (DetourLimit + arrival_margin). Turnaround pivots and the
+        final destination deliberately keep their own tight threshold: each
+        is the ENDPOINT of a published path phase, which the planner drives
+        to exactly, corridor or not.
+        """
+        if self._last_detour > 0.0:
+            derived = self._last_detour + self.arrival_margin
+            return derived, derived
+        return self.arrival_threshold, self.corner_arrival_threshold
 
     def _deep_update_robot_state(self, nested: Dict) -> None:
         """Deep-merge nested dict into robot_state.json under file lock.
@@ -260,6 +322,18 @@ class MidwareBridge:
             self.speed_limit_pub.publish(msg_spd)
             rospy.loginfo("[util_3dnav] Speed=%d → vel=%.2f acc=%.2f", speed, vel, acc)
             self._last_speed = speed
+
+        # Optional runtime corridor width (meters). Forwarded only when the
+        # upper system actually sets navigation.DetourLimit > 0; otherwise the
+        # planner keeps its launch-time optimization/max_detour.
+        try:
+            detour = float(nav.get("DetourLimit", -1))
+        except (TypeError, ValueError):
+            detour = -1.0
+        if detour > 0.0 and abs(detour - self._last_detour) > 1e-6:
+            self.detour_limit_pub.publish(Float64(data=detour))
+            rospy.loginfo("[util_3dnav] DetourLimit=%.2f → /detour_limit/set", detour)
+            self._last_detour = detour
 
     def _write_robot_state_periodic(self, task: Optional[dict]) -> None:
         """Write navigation + perception status fields to robot_state.json each poll tick."""
@@ -710,20 +784,26 @@ class MidwareBridge:
             if delta is None:
                 break
             xy_dist, z_dist = delta
+            # Normal and corner thresholds follow DetourLimit when set (see
+            # _effective_thresholds); pivots and the final destination keep
+            # the tight fixed threshold below.
+            arrival_thr, corner_thr = self._effective_thresholds()
             # Use the tighter turnaround threshold (0.5m) not only at direction-
             # reversal pivots but also at the route's FINAL destination -- for a
             # single-leg trip ("单程") that last point isn't a pivot, so it would
-            # otherwise settle for the looser 0.6m arrival. Treating the trip's
-            # own endpoint like a corner makes the robot actually reach it.
+            # otherwise settle for the looser arrival radius. Each of these is
+            # the endpoint of a published path phase, which the planner drives
+            # to exactly regardless of the corridor width.
             is_final_destination = evaluating_idx == len(path) - 1
             if evaluating_idx in turn_indices or is_final_destination:
                 xy_threshold = self.turnaround_arrival_threshold
             elif evaluating_idx in corner_indices:
-                # Geometric corner (A-B-C bend > corner_angle_threshold): reach
-                # the bend tightly before cutting to the next leg.
-                xy_threshold = self.corner_arrival_threshold
+                # Geometric corner (A-B-C bend > corner_angle_threshold): the
+                # corridor cuts corners from the inside, so this follows
+                # DetourLimit too.
+                xy_threshold = corner_thr
             else:
-                xy_threshold = self.arrival_threshold
+                xy_threshold = arrival_thr
             if xy_dist > xy_threshold or z_dist > self.z_arrival_threshold:
                 break
 
@@ -843,6 +923,18 @@ class MidwareBridge:
                     self.completion_hold_until = None
                     rospy.loginfo("[util_3dnav] completion hold elapsed, stopping pct_path publication")
                 if self.was_running:
+                    status = str(task.get("status", "") or "")
+                    if status not in ("completed", "failed"):
+                        # The upper system withdrew a LIVE task (cancel): stop
+                        # the robot now. Normal completion/failure sends
+                        # nothing -- the robot is already standing and the
+                        # planner is IDLE; a terminate here would just latch
+                        # STOPPED for no reason.
+                        self.task_control_pub.publish(Int8(data=1))
+                        self._sent_terminate = True
+                        rospy.loginfo(
+                            "[util_3dnav] task cancelled by upper system -> /mission/task_control=1 (terminate)"
+                        )
                     write_json(self.robot_file, {"status": "idle"})
                     rospy.loginfo("[util_3dnav] task stopped, robot_state.status set to idle")
                 self.active_target = ""
@@ -913,6 +1005,36 @@ class MidwareBridge:
             # A live running task means we're not in a post-arrival hold; drop
             # any stale hold timer so it can't leak into a later stop of THIS run.
             self.completion_hold_until = None
+
+            if self.was_running:
+                # Planner-side safety stop (heartbeat timeout / external
+                # stop) while the upper system still thinks the task is
+                # running: surface it as a failure instead of silently
+                # stalling forever. Skipped when the STOPPED state is just
+                # the terminate WE sent on a cancel.
+                with self.state_lock:
+                    planner_state = self._mission_state
+                if planner_state == 3 and not self._sent_terminate:
+                    self._update_task(
+                        {"status": "failed", "message": "导航异常终止（安全停止）"}
+                    )
+                    rospy.logwarn("[util_3dnav] planner reported STOPPED; task marked failed")
+                    rate.sleep()
+                    continue
+            else:
+                # New task starting: clear a possible STOPPED latch in the
+                # planner BEFORE the first path goes out (a STOPPED
+                # MissionFSM rejects paths), and re-arm the command caches
+                # so NavMode/Speed/DetourLimit are re-published even if
+                # unchanged -- their first publication may have been lost if
+                # the planner started after this bridge (pub/sub connect race).
+                self.task_control_pub.publish(Int8(data=0))
+                self._sent_terminate = False
+                self._last_nav_mode = -1
+                self._last_speed = -1
+                self._last_detour = -1.0
+                rospy.sleep(0.2)  # let the RUN unlock land before the path
+
             self.was_running = True
             self._apply_robot_commands()
             self._update_robot_navigation_state(map_name, path)

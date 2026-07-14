@@ -75,19 +75,33 @@ private:
   void controlTimerCallback(const ros::TimerEvent &)
   {
     geometry_msgs::Twist cmd;
+    bool stale;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const double elapsed = (ros::Time::now() - last_cmd_time_).toSec();
-      if (!has_cmd_ || elapsed > timeout_sec_)
-      {
-        cmd = geometry_msgs::Twist();
-      }
-      else
-      {
+      stale = (!has_cmd_ || elapsed > timeout_sec_);
+      if (!stale)
         cmd = latest_cmd_;
-      }
     }
 
+    if (stale)
+    {
+      // Command stream went quiet (planner finished/released, or upstream
+      // died): brake once, hand the gait back with StopMove once, and stop
+      // hammering the SDK until fresh commands arrive. Feeding Move(0,0,0)
+      // at 200 Hz forever would keep the dog locked in locomotion mode and
+      // never let it settle to standby.
+      if (sdk_active_)
+      {
+        sport_client_->Move(0.0, 0.0, 0.0);
+        sport_client_->StopMove();
+        sdk_active_ = false;
+        ROS_WARN("[unitree_cmd_vel_bridge] cmd_vel stale for %.2fs -> StopMove, releasing gait.", timeout_sec_);
+      }
+      return;
+    }
+
+    sdk_active_ = true;
     const int result = sport_client_->Move(cmd.linear.x, cmd.linear.y, cmd.angular.z);
     if (result < 0)
     {
@@ -112,6 +126,9 @@ private:
   geometry_msgs::Twist latest_cmd_;
   ros::Time last_cmd_time_;
   bool has_cmd_ = false;
+  // True while we are actively feeding Move() to the SDK; used to send the
+  // brake + StopMove release exactly once when the command stream goes stale.
+  bool sdk_active_ = false;
 
   std::string network_interface_;
   std::string cmd_vel_topic_;

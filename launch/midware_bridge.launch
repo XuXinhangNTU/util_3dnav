@@ -20,6 +20,21 @@
   <!-- Obstacle / dodge status subscribed from the planner. -->
   <arg name="dodge_status_topic" default="/planning/dodge_status"/>
 
+  <!-- Mission-FSM lifecycle topics (cylinder_planner). task_control: 1 is
+       sent on upper-system cancel (terminate), 0 before each new task
+       (unlock). mission_state: 0 IDLE / 1 ACTIVE / 2 PAUSED_BLOCKED /
+       3 STOPPED; a STOPPED not caused by our own terminate marks the task
+       failed in task_state.json. -->
+  <arg name="task_control_topic"  default="/mission/task_control"/>
+  <arg name="mission_state_topic" default="/mission/state"/>
+  <!-- Watchdog heartbeat: published at 5 Hz while a task runs so the planner
+       auto-stops the robot if this bridge / the upper system dies. -->
+  <arg name="enable_heartbeat"    default="true"/>
+  <arg name="heartbeat_topic"     default="/mission/heartbeat"/>
+  <!-- Runtime max-detour corridor width, from robot_state.json
+       navigation.DetourLimit (meters; only forwarded when > 0). -->
+  <arg name="detour_limit_topic"  default="/detour_limit/set"/>
+
   <!-- ── Path publishing ───────────────────────────────────────────────── -->
   <!-- Spacing between interpolated path points (m). -->
   <arg name="path_point_spacing"       default="0.8"/>
@@ -29,8 +44,16 @@
   <arg name="publish_remaining_only"   default="true"/>
 
   <!-- ── Arrival detection ─────────────────────────────────────────────── -->
-  <!-- XY distance threshold to consider a normal waypoint reached (m). -->
+  <!-- XY distance threshold to consider a normal waypoint reached (m).
+       NOTE: when robot_state.json sets navigation.DetourLimit (> 0), the
+       normal and corner thresholds are DERIVED from it instead, as
+       DetourLimit + arrival_margin: the planner's corridor legitimately
+       lets the trajectory pass a waypoint offset by up to DetourLimit, so a
+       fixed radius smaller than that can never trigger. These static values
+       are the fallback when DetourLimit is not set. -->
   <arg name="arrival_threshold"            default="2.0"/>
+  <!-- Slack added on top of DetourLimit for the derived thresholds (m). -->
+  <arg name="arrival_margin"               default="0.3"/>
   <!-- Tighter threshold for retrace pivot points (m). -->
   <arg name="turnaround_arrival_threshold" default="0.5"/>
   <!-- Tighter threshold for geometric corners (m): an interior waypoint B
@@ -69,6 +92,12 @@
     <remap from="/planning/bounded_dodge_enable" to="$(arg bounded_dodge_enable_topic)"/>
     <remap from="/speed_limit/set"               to="$(arg speed_limit_topic)"/>
     <remap from="/planning/dodge_status"         to="$(arg dodge_status_topic)"/>
+    <remap from="/mission/task_control"          to="$(arg task_control_topic)"/>
+    <remap from="/mission/state"                 to="$(arg mission_state_topic)"/>
+    <remap from="/mission/heartbeat"             to="$(arg heartbeat_topic)"/>
+    <remap from="/detour_limit/set"              to="$(arg detour_limit_topic)"/>
+
+    <param name="enable_heartbeat" value="$(arg enable_heartbeat)" type="bool"/>
 
     <!-- Path publishing -->
     <param name="path_point_spacing"     value="$(arg path_point_spacing)"     type="double"/>
@@ -77,6 +106,7 @@
 
     <!-- Arrival detection -->
     <param name="arrival_threshold"            value="$(arg arrival_threshold)"            type="double"/>
+    <param name="arrival_margin"               value="$(arg arrival_margin)"               type="double"/>
     <param name="turnaround_arrival_threshold" value="$(arg turnaround_arrival_threshold)" type="double"/>
     <param name="corner_arrival_threshold"     value="$(arg corner_arrival_threshold)"     type="double"/>
     <param name="corner_angle_threshold"       value="$(arg corner_angle_threshold)"       type="double"/>
